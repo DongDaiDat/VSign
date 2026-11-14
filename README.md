@@ -1,4 +1,4 @@
-# VSign: Real-Time Multilingual Vietnamese Sign Language Recognition & Translation System
+# VSign: Real-Time Multilingual Vietnamese Sign Language Recognition & Translation System !
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
