@@ -3036,6 +3036,227 @@ export class InternshipsService {
             total: true,
           },
         },
+                            "internship.mentor_change",
+                    "company.score_on_behalf",
+                  ],
+                },
+              },
+              {
+                targetId: { in: item.weeklyReports.map((r) => r.id) },
+                action: "weekly_report.unlock",
+              },
+            ],
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+          select: {
+            id: true,
+            action: true,
+            reason: true,
+            createdAt: true,
+            actor: { select: { fullName: true } },
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+  async exportReport(
+    user: AuthUser,
+    type: "applications" | "progress",
+    query: ApplicationListQueryDto | ProgressQueryDto,
+  ) {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet(
+      type === "applications" ? "Dang ky" : "Tien do ket qua",
+    );
+    let rows: (string | number | Date | null)[][];
+    let headers: string[];
+    if (type === "applications") {
+      const result = await this.applicationReport(user, {
+        ...query,
+        page: 1,
+        pageSize: 10001,
+      } as ApplicationListQueryDto);
+      if (result.total > 10000)
+        throw new BadRequestException(
+          "Tối đa 10.000 hồ sơ mỗi lần xuất. Hãy thu hẹp bộ lọc.",
+        );
+      headers = [
+        "Mã sinh viên",
+        "Họ tên",
+        "Lớp",
+        "Khoa",
+        "Ngành",
+        "Chương trình",
+        "Khóa",
+        "Đợt",
+        "Doanh nghiệp",
+        "Điều kiện lúc đăng ký",
+        "Trạng thái",
+        "Ngày gửi",
+      ];
+      const labels: Record<string, string> = {
+        Draft: "Bản nháp",
+        Submitted: "Chờ phê duyệt",
+        NeedsRevision: "Cần bổ sung",
+        Approved: "Đã duyệt",
+        Rejected: "Từ chối",
+        Cancelled: "Đã hủy",
+      };
+      rows = result.items.map((item) => [
+        item.student.studentCode,
+        item.student.fullName,
+        item.student.className,
+        item.student.department?.name ?? "",
+        item.student.academicMajor?.name ?? "",
+        item.student.program?.name ?? "",
+        item.student.academicCohort?.code ?? "",
+        item.period.name,
+        item.company?.name ?? item.externalCompanyName,
+        item.eligibilityPassed ? "Đủ điều kiện" : "Chưa đủ điều kiện",
+        labels[item.status],
+        item.submittedAt,
+      ]);
+    } else {
+      const result = await this.progressReport(user, {
+        ...query,
+        page: 1,
+        pageSize: 10001,
+      } as ProgressQueryDto);
+      if (result.total > 10000)
+        throw new BadRequestException(
+          "Tối đa 10.000 hồ sơ mỗi lần xuất. Hãy thu hẹp bộ lọc.",
+        );
+      headers = [
+        "Mã sinh viên",
+        "Họ tên",
+        "Đợt",
+        "Doanh nghiệp",
+        "Giảng viên",
+        "Số tuần",
+        "Đã nộp",
+        "Đã nhận xét",
+        "Quá hạn chưa nộp",
+        "Lịch tuần",
+        "Phiếu đã chấm",
+        "Phiếu cần có",
+        "Điểm doanh nghiệp",
+        "Điểm giảng viên",
+        "Tổng đã chốt",
+        "Điểm chữ",
+        "Kết quả",
+      ];
+      rows = result.items.map((item) => [
+        item.student.studentCode,
+        item.student.fullName,
+        item.periodName,
+        item.companyName,
+        item.mentorName,
+        item.weeks,
+        item.submittedWeeks,
+        item.reviewedWeeks,
+        item.overdueWeeks,
+        item.missingSchedule ? "Thiếu lịch" : "Đủ lịch",
+        item.companyVotes,
+        item.expectedVotes,
+        item.companyScore,
+        item.facultyScore,
+        item.finalGrade?.total ?? null,
+        item.finalGrade?.letterGrade ?? null,
+        item.finalGrade
+          ? item.finalGrade.passed
+            ? "Đạt"
+            : "Không đạt"
+          : "Chưa chốt",
+      ]);
+    }
+    sheet.columns = headers.map((header) => ({
+      header,
+      width: /Họ tên|Doanh nghiệp|Giảng viên|Đợt/.test(header) ? 30 : 22,
+    }));
+    sheet.addRows(rows);
+    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    sheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF334E68" },
+    };
+    sheet.getRow(1).height = 32;
+    sheet.eachRow((row) => {
+      row.alignment = { vertical: "top", wrapText: true };
+    });
+    sheet.views = [{ state: "frozen", ySplit: 1 }];
+    sheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: rows.length + 1, column: headers.length },
+    };
+    if (type === "applications") sheet.getColumn(8).numFmt = "dd/mm/yyyy hh:mm";
+    else for (const col of [13, 14, 15]) sheet.getColumn(col).numFmt = "0.00";
+    return book.xlsx.writeBuffer();
+  }
+  async dashboard(user: AuthUser, periodId?: string) {
+    const now = new Date();
+    if (periodId) await this.requirePeriodScope(periodId, user, this.prisma);
+    const scope = {
+      ...this.periodScope(user),
+      ...(periodId ? { id: periodId } : {}),
+    };
+    const scoped = Object.keys(scope).length > 0;
+    this.require(user, Role.FacultyManager, Role.InternshipCoordinator);
+    const [
+      students,
+      periods,
+      pendingApplications,
+      activeInternships,
+      verifiedCompanies,
+      revisionReports,
+      grades,
+      reportSchedules,
+      pendingReviews,
+      pendingCompanies,
+    ] = await this.prisma.$transaction(
+      [
+        this.prisma.studentProfile.count({
+          where: scoped ? { applications: { some: { period: scope } } } : {},
+        }),
+        this.prisma.internshipPeriod.count({ where: scope }),
+        this.prisma.internshipApplication.count({
+          where: { status: ApplicationStatus.Submitted, period: scope },
+        }),
+        this.prisma.internship.count({
+          where: {
+            startsAt: { lte: now },
+            endsAt: { gte: now },
+            finalGrade: null,
+            period: scope,
+          },
+        }),
+        this.prisma.companyProfile.count({
+          where: {
+            isVerified: true,
+            ...(scoped ? { applications: { some: { period: scope } } } : {}),
+          },
+        }),
+        this.prisma.weeklyReport.count({
+          where: {
+            status: WeeklyReportStatus.NeedsRevision,
+            internship: { period: scope },
+          },
+        }),
+        this.prisma.finalGrade.aggregate({
+          where: { internship: { period: scope } },
+          _avg: { total: true },
+          _count: true,
+        }),
+        this.prisma.internship.findMany({
+          where: { period: { status: "Published", ...scope } },
+          select: {
+            period: {
+              select: { weeklyDeadlines: true, weeklyReportCount: true },
+            },
+            weeklyReports: { select: { weekNumber: true, submittedAt: true } },
+          },
+        }),
         finalGrade: { select: { total: true, letterGrade: true } },
       },
       orderBy: { createdAt: "desc" },
