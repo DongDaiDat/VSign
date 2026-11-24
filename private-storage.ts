@@ -839,6 +839,8 @@ export class PrivateStorage {
       throw error;
     }
   }
+      return (
+
   async putObject(
     bucket: string,
     key: string,
